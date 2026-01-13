@@ -27,20 +27,22 @@ fn load_mnist() -> (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>) {
 
 trait Module {
     fn forward(&mut self, input: Array2<f32>) -> Array2<f32>; // Input is (batch_size, features)
-    fn backward(&mut self, next_layer_grad: Array2<f32>) -> Array2<f32>;
+    fn backward(&mut self, next_layer_err: Array2<f32>) -> Array2<f32>;
 }
 
 #[derive(Debug)]
+///  z = W.a_prev + b
 struct FcLayer {
     input_size: usize,
     output_size: usize,
+    //
     weights: Array2<f32>, // (input_size, output_size)
     bias: Array1<f32>,    //  (output_size)
     // for backprop
-    last_input: Option<Array2<f32>>, // (batch_size, input_size)
+    last_input: Option<Array2<f32>>, // (batch_size, input_size), this is the prev layer activation
     //
-    w_grad: Option<Array2<f32>>, // (batch_size, input_size, output_size)
-    b_grad: Option<Array2<f32>>, // (batch_size, output_size)
+    w_grad: Option<Array2<f32>>, // (input_size, output_size)
+    b_grad: Option<Array1<f32>>, // (output_size)
 }
 
 impl FcLayer {
@@ -75,7 +77,35 @@ impl Module for FcLayer {
     }
 
     fn backward(&mut self, next_layer_err: Array2<f32>) -> Array2<f32> {
-        todo!()
+        let last_input = self
+            .last_input
+            .take()
+            .expect("Need to do a forward pass before the backward");
+
+        // Gradients for this layer weights
+        // w: (batch_size, input_size)^T X (batch_size, output_size) = (input_size, output_size)
+        self.w_grad = Some(last_input.t().dot(&next_layer_err));
+        // b: (batch_size, output_size) summed over batch-axis = (output_size)
+        self.b_grad = Some(next_layer_err.sum_axis(Axis(0)));
+
+        //  What needs to be passed on to the 'previous' layer in the network
+        //  (batch_size, output_size) X (input_size, output_size)^T
+        next_layer_err.dot(&self.weights.t()) // (input_size, batch_size)
+    }
+}
+
+#[derive(Debug)]
+struct ReluLayer {
+    last_input: Array2<f32>,
+}
+
+impl Module for ReluLayer {
+    fn forward(&mut self, input: Array2<f32>) -> Array2<f32> {
+        input.mapv(|x| x.max(0.0))
+    }
+
+    fn backward(&mut self, next_layer_err: Array2<f32>) -> Array2<f32> {
+        self.last_input.mapv(|x| if x > 0.0 { 1.0 } else { 0.0 }) * next_layer_err
     }
 }
 
@@ -146,23 +176,29 @@ impl Module for ConvLayer {
 #[derive(Debug)]
 enum Layer {
     FC(FcLayer),
+    ReLU(ReluLayer),
     Conv(ConvLayer),
-    ReLU,
+    // MaxPooling,
     Softmax,
 }
 
 impl Module for Layer {
     fn forward(&mut self, input: Array2<f32>) -> Array2<f32> {
         match self {
-            Layer::FC(fc_layer) => fc_layer.forward(input),
+            Layer::FC(l) => l.forward(input),
+            Layer::ReLU(l) => l.forward(input),
             Layer::Conv(_) => todo!(),
-            Layer::ReLU => todo!(),
             Layer::Softmax => todo!(),
         }
     }
 
-    fn backward(&mut self, _post_grad: Array2<f32>) -> Array2<f32> {
-        todo!()
+    fn backward(&mut self, next_layer_err: Array2<f32>) -> Array2<f32> {
+        match self {
+            Layer::FC(l) => l.backward(next_layer_err),
+            Layer::ReLU(l) => l.backward(next_layer_err),
+            Layer::Conv(_) => todo!(),
+            Layer::Softmax => todo!(),
+        }
     }
 }
 
