@@ -2,6 +2,28 @@ use ndarray::prelude::*;
 
 use ndarray_rand::RandomExt;
 use ndarray_rand::rand_distr::Uniform;
+use mnist::MnistBuilder;
+use indicatif::ProgressIterator;  // Adds .progress() to iterators (like tqdm)
+
+/// Loads the MNIST dataset - downloads automatically if not cached
+///
+/// Returns: (train_images, train_labels, test_images, test_labels)
+/// - Images are Vec<u8> with pixel values 0-255
+/// - Labels are Vec<u8> with digit values 0-9
+fn load_mnist() -> (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>) {
+    let mnist = MnistBuilder::new()
+        .base_path("data/")
+        .training_set_length(60_000)
+        .test_set_length(10_000)
+        .finalize();
+
+    (
+        mnist.trn_img,  // 60,000 * 784 bytes (28x28 images flattened)
+        mnist.trn_lbl,  // 60,000 labels
+        mnist.tst_img,  // 10,000 * 784 bytes
+        mnist.tst_lbl,  // 10,000 labels
+    )
+}
 
 trait Module {
     fn forward(&mut self, input: Array2<f32>) -> Array2<f32>; // Input is (batch_size, features)
@@ -165,13 +187,49 @@ impl Module for NN {
 }
 
 fn main() {
-    let nn = NN {
+    let mut nn = NN {
         layers: vec![
-            Layer::FC(FcLayer::new(1, 10)), // input will be the output lol, let's try to train the
-            // 'identity' neural network!
-            Layer::Softmax,
+            Layer::FC(FcLayer::new(784, 10)),
         ],
     };
 
-    println!("My nn: {:?}", nn);
+    let (train_images, train_labels, test_images, test_labels) = load_mnist();
+    println!("Train images: {:?}", train_images.len());
+    println!("Train labels: {:?}", train_labels.len());
+    println!("Test images: {:?}", test_images.len());
+    println!("Test labels: {:?}", test_labels.len());
+
+
+    // train loop
+    // TODO: calculate loss and do backpropagation
+    println!("Training...");
+    for (image, _label) in train_images.chunks(784).zip(train_labels.iter()).progress_count(60_000) {
+        let img_f32: Vec<f32> = image.iter().map(|&x| x as f32).collect();
+        let input = Array2::from_shape_vec((1, 784), img_f32).unwrap();
+        let _output = nn.forward(input);
+    }
+
+    // test loop
+    // TODO: calculate accuracy
+    println!("Testing...");
+    let mut total_correct = 0;
+    let mut total_samples = 0;
+    for (image, label) in test_images.chunks(784).zip(test_labels.iter()).progress_count(10_000) {
+        let img_f32: Vec<f32> = image.iter().map(|&x| x as f32).collect();
+        let input = Array2::from_shape_vec((1, 784), img_f32).unwrap();
+        let output = nn.forward(input);
+        // Find index of max value (argmax)
+        let predicted_label = output
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+            .map(|(idx, _)| idx)
+            .unwrap() as u8;
+        if predicted_label == *label {
+            total_correct += 1;
+        }
+        total_samples += 1;
+    }
+    let accuracy = total_correct as f32 / total_samples as f32;
+    println!("Accuracy: {:?}", accuracy);
 }
