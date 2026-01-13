@@ -5,9 +5,9 @@ use crate::{load_mnist, Module, NN};
 use std::fs;
 use std::path::Path;
 
-type CostFunction = fn(labels: &[u8], actual_y: &Array2<f32>) -> Array2<f32>;
+type CostFunction = fn(labels: &[u8], actual_y: &Array2<f32>) -> (Array2<f32>, Array2<f32>);
 
-fn least_squares(labels: &[u8], actual_y: &Array2<f32>) -> Array2<f32> {
+fn least_squares(labels: &[u8], actual_y: &Array2<f32>) -> (Array2<f32>, Array2<f32>) {
     let batch_size = labels.len();
     let num_classes = actual_y.ncols();
 
@@ -18,7 +18,9 @@ fn least_squares(labels: &[u8], actual_y: &Array2<f32>) -> Array2<f32> {
     }
 
     // Calculate least squares for each sample in batch: (expected - actual)^2
-    (expected_y - actual_y).mapv(|x| x * x)
+    let loss = (expected_y - actual_y).mapv(|x| x * x);
+    let grad = 2.0 * (expected_y - actual_y);
+    (loss, grad)
 }
 
 trait Optimizer {
@@ -33,15 +35,11 @@ impl Optimizer for SGD {
     fn step(&self, nn: &mut NN, cost_function: CostFunction, labels: &[u8], output: &Array2<f32>) {
         let num_layers = nn.layers.len();
         // Calculate loss for the batch
-        let mut prev_grad = cost_function(labels, output);
+        let mut loss, grad = cost_function(labels, output);
         // Backpropagate through layers in reverse order
-        for layer_idx in (0..num_layers).rev() {
-            prev_grad = nn.layers[layer_idx].backward(prev_grad);
-        }
+        nn.backward(grad);
 
-        for layer in (nn.layers) {
-            layer.step(self.learning_rate);
-        }
+        nn.step(self.learning_rate);
     }
 }
 

@@ -206,7 +206,7 @@ impl Module for Layer {
         match self {
             Layer::FC(l) => l.forward(input),
             Layer::ReLU(l) => l.forward(input),
-            Layer::Conv(_) => todo!(),
+            // Layer::Conv(_) => todo!(),
             Layer::Softmax => todo!(),
         }
     }
@@ -237,7 +237,10 @@ impl Module for NN {
     }
 
     fn backward(&mut self, _next_layer_err: Array2<f32>) -> Array2<f32> {
-        todo!()
+        let mut x = _next_layer_err;
+        for layer in &mut self.layers.reverse() {
+            x = layer.backward(x);
+        }
     }
     fn step(&mut self, learning_rate: f32) {
         for layer in &mut self.layers {
