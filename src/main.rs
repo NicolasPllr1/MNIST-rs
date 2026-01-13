@@ -236,11 +236,13 @@ impl Module for NN {
         x
     }
 
-    fn backward(&mut self, _next_layer_err: Array2<f32>) -> Array2<f32> {
-        let mut x = _next_layer_err;
-        for layer in &mut self.layers.reverse() {
+    fn backward(&mut self, next_layer_err: Array2<f32>) -> Array2<f32> {
+        let mut x = next_layer_err;
+        // Iterate layers in reverse order, mutate each as we go
+        for layer in self.layers.iter_mut().rev() {
             x = layer.backward(x);
         }
+        x
     }
     fn step(&mut self, learning_rate: f32) {
         for layer in &mut self.layers {

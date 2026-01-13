@@ -18,8 +18,8 @@ fn least_squares(labels: &[u8], actual_y: &Array2<f32>) -> (Array2<f32>, Array2<
     }
 
     // Calculate least squares for each sample in batch: (expected - actual)^2
-    let loss = (expected_y - actual_y).mapv(|x| x * x);
-    let grad = 2.0 * (expected_y - actual_y);
+    let loss = (expected_y.clone() - actual_y).mapv(|x| x * x);
+    let grad = 2.0 * (expected_y.clone() - actual_y);
     (loss, grad)
 }
 
@@ -33,9 +33,8 @@ struct SGD {
 
 impl Optimizer for SGD {
     fn step(&self, nn: &mut NN, cost_function: CostFunction, labels: &[u8], output: &Array2<f32>) {
-        let num_layers = nn.layers.len();
-        // Calculate loss for the batch
-        let mut loss, grad = cost_function(labels, output);
+        // Calculate loss and gradient for the batch
+        let (_loss, grad) = cost_function(labels, output);
         // Backpropagate through layers in reverse order
         nn.backward(grad);
 
