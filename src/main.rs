@@ -158,76 +158,10 @@ impl Module for SoftMaxLayer {
     }
 }
 
-// #[derive(Debug)]
-// struct ConvLayer {
-//     nb_channels: usize,
-//     height: usize,
-//     width: usize,
-//     kernels: Vec<Array4<f32>>, // (output_channels, input_channels, height, width)
-//     bias: Array1<f32>,         // (features)
-// }
-
-// impl ConvLayer {
-//     fn new(
-//         nb_channels: usize,
-//         in_channels: usize,
-//         out_channels: usize,
-//         height: usize,
-//         width: usize,
-//     ) -> ConvLayer {
-//         let mut kernels = Vec::new();
-//         for _ in 0..nb_channels {
-//             kernels.push(ConvLayer::init_conv_kernel(
-//                 in_channels,
-//                 out_channels,
-//                 height,
-//                 width,
-//             ));
-//         }
-
-//         ConvLayer {
-//             nb_channels,
-//             height,
-//             width,
-//             kernels,
-//             bias: ConvLayer::init_bias(out_channels), // TODO: check if this is really one
-//                                                       // bias per output channels
-//         }
-//     }
-
-//     fn init_conv_kernel(
-//         in_channels: usize,
-//         out_channels: usize,
-//         height: usize,
-//         width: usize,
-//     ) -> Array4<f32> {
-//         return Array4::random(
-//             (in_channels, out_channels, height, width),
-//             Uniform::new(0., 1.0).unwrap(),
-//         );
-//     }
-
-//     fn init_bias(output_size: usize) -> Array1<f32> {
-//         return Array1::random(output_size, Uniform::new(0., 1.0).unwrap());
-//     }
-// }
-
-// impl Module for ConvLayer {
-//     fn forward(&mut self, input: Array2<f32>) -> Array2<f32> {
-//         todo!()
-//     }
-
-//     fn backward(&mut self, _post_grad: Array2<f32>) -> Array2<f32> {
-//         todo!()
-//     }
-// }
-
 #[derive(Serialize, Deserialize, Debug)]
 enum Layer {
     FC(FcLayer),
     ReLU(ReluLayer),
-    // Conv(ConvLayer),
-    // MaxPooling,
     Softmax(SoftMaxLayer),
 }
 
@@ -236,7 +170,6 @@ impl Module for Layer {
         match self {
             Layer::FC(l) => l.forward(input),
             Layer::ReLU(l) => l.forward(input),
-            // Layer::Conv(_) => todo!(),
             Layer::Softmax(l) => l.forward(input),
         }
     }
@@ -245,7 +178,6 @@ impl Module for Layer {
         match self {
             Layer::FC(l) => l.backward(next_layer_err),
             Layer::ReLU(l) => l.backward(next_layer_err),
-            // Layer::Conv(_) => todo!(),
             Layer::Softmax(l) => l.backward(next_layer_err),
         }
     }
