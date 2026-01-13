@@ -172,8 +172,12 @@ impl Module for Layer {
         }
     }
 
-    fn step(&mut self, learning_rate: f32) {
-        todo!()
+    fn step(&mut self, lr: f32) {
+        match self {
+            Layer::FC(l) => l.step(lr),
+            Layer::ReLU(l) => l.step(lr),
+            Layer::Softmax(l) => l.step(lr),
+        }
     }
 }
 
