@@ -34,6 +34,7 @@ pub fn load_mnist() -> (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>) {
 trait Module {
     fn forward(&mut self, input: Array2<f32>) -> Array2<f32>; // Input is (batch_size, features)
     fn backward(&mut self, next_layer_err: Array2<f32>) -> Array2<f32>;
+    fn step(&mut self, learning_rate: f32);
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -98,6 +99,15 @@ impl Module for FcLayer {
         //  (batch_size, output_size) X (input_size, output_size)^T
         next_layer_err.dot(&self.weights.t()) // (input_size, batch_size)
     }
+    fn step(&mut self, learning_rate: f32) {
+        self.weights -= self.w_grad.unwrap() * learning_rate;
+        self.bias -= self.b_grad.unwrap() * learning_rate;
+        // reset gradients
+        self.w_grad = None;
+        self.b_grad = None;
+        // reset input
+        self.last_input = None;
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -113,77 +123,80 @@ impl Module for ReluLayer {
     fn backward(&mut self, next_layer_err: Array2<f32>) -> Array2<f32> {
         self.last_input.mapv(|x| if x > 0.0 { 1.0 } else { 0.0 }) * next_layer_err
     }
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct ConvLayer {
-    nb_channels: usize,
-    height: usize,
-    width: usize,
-    kernels: Vec<Array4<f32>>, // (output_channels, input_channels, height, width)
-    bias: Array1<f32>,         // (features)
-}
-
-impl ConvLayer {
-    fn new(
-        nb_channels: usize,
-        in_channels: usize,
-        out_channels: usize,
-        height: usize,
-        width: usize,
-    ) -> ConvLayer {
-        let mut kernels = Vec::new();
-        for _ in 0..nb_channels {
-            kernels.push(ConvLayer::init_conv_kernel(
-                in_channels,
-                out_channels,
-                height,
-                width,
-            ));
-        }
-
-        ConvLayer {
-            nb_channels,
-            height,
-            width,
-            kernels,
-            bias: ConvLayer::init_bias(out_channels), // TODO: check if this is really one
-                                                      // bias per output channels
-        }
-    }
-
-    fn init_conv_kernel(
-        in_channels: usize,
-        out_channels: usize,
-        height: usize,
-        width: usize,
-    ) -> Array4<f32> {
-        return Array4::random(
-            (in_channels, out_channels, height, width),
-            Uniform::new(0., 1.0).unwrap(),
-        );
-    }
-
-    fn init_bias(output_size: usize) -> Array1<f32> {
-        return Array1::random(output_size, Uniform::new(0., 1.0).unwrap());
+    fn step(&mut self, learning_rate: f32) {
+        self.last_input = None;
     }
 }
 
-impl Module for ConvLayer {
-    fn forward(&mut self, _input: Array2<f32>) -> Array2<f32> {
-        todo!()
-    }
+// #[derive(Debug)]
+// struct ConvLayer {
+//     nb_channels: usize,
+//     height: usize,
+//     width: usize,
+//     kernels: Vec<Array4<f32>>, // (output_channels, input_channels, height, width)
+//     bias: Array1<f32>,         // (features)
+// }
 
-    fn backward(&mut self, _next_layer_err: Array2<f32>) -> Array2<f32> {
-        todo!()
-    }
-}
+// impl ConvLayer {
+//     fn new(
+//         nb_channels: usize,
+//         in_channels: usize,
+//         out_channels: usize,
+//         height: usize,
+//         width: usize,
+//     ) -> ConvLayer {
+//         let mut kernels = Vec::new();
+//         for _ in 0..nb_channels {
+//             kernels.push(ConvLayer::init_conv_kernel(
+//                 in_channels,
+//                 out_channels,
+//                 height,
+//                 width,
+//             ));
+//         }
+
+//         ConvLayer {
+//             nb_channels,
+//             height,
+//             width,
+//             kernels,
+//             bias: ConvLayer::init_bias(out_channels), // TODO: check if this is really one
+//                                                       // bias per output channels
+//         }
+//     }
+
+//     fn init_conv_kernel(
+//         in_channels: usize,
+//         out_channels: usize,
+//         height: usize,
+//         width: usize,
+//     ) -> Array4<f32> {
+//         return Array4::random(
+//             (in_channels, out_channels, height, width),
+//             Uniform::new(0., 1.0).unwrap(),
+//         );
+//     }
+
+//     fn init_bias(output_size: usize) -> Array1<f32> {
+//         return Array1::random(output_size, Uniform::new(0., 1.0).unwrap());
+//     }
+// }
+
+// impl Module for ConvLayer {
+//     fn forward(&mut self, input: Array2<f32>) -> Array2<f32> {
+//         todo!()
+//     }
+
+//     fn backward(&mut self, _post_grad: Array2<f32>) -> Array2<f32> {
+//         todo!()
+//     }
+// }
 
 #[derive(Serialize, Deserialize, Debug)]
 enum Layer {
     FC(FcLayer),
     ReLU(ReluLayer),
-    Conv(ConvLayer),
+    // Conv(ConvLayer),
     // MaxPooling,
     Softmax,
 }
@@ -202,7 +215,7 @@ impl Module for Layer {
         match self {
             Layer::FC(l) => l.backward(next_layer_err),
             Layer::ReLU(l) => l.backward(next_layer_err),
-            Layer::Conv(_) => todo!(),
+            // Layer::Conv(_) => todo!(),
             Layer::Softmax => todo!(),
         }
     }
@@ -225,6 +238,11 @@ impl Module for NN {
 
     fn backward(&mut self, _next_layer_err: Array2<f32>) -> Array2<f32> {
         todo!()
+    }
+    fn step(&mut self, learning_rate: f32) {
+        for layer in &mut self.layers {
+            layer.step(learning_rate);
+        }
     }
 }
 
