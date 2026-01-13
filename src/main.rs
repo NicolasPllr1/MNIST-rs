@@ -1,16 +1,22 @@
+mod run;
+mod train;
+
 use ndarray::prelude::*;
 
-use ndarray_rand::RandomExt;
-use ndarray_rand::rand_distr::Uniform;
+use indicatif::ProgressIterator; // Adds .progress() to iterators (like tqdm)
 use mnist::MnistBuilder;
-use indicatif::ProgressIterator;  // Adds .progress() to iterators (like tqdm)
+use ndarray_rand::rand_distr::Uniform;
+use ndarray_rand::RandomExt;
+use serde::{Deserialize, Serialize};
+use std::fs::File;
+use std::io::{Read, Write};
 
 /// Loads the MNIST dataset - downloads automatically if not cached
 /// This is just some black magic which uses the ubyte files in data. Do not touch those.
 /// Returns: (train_images, train_labels, test_images, test_labels)
 /// - Images are Vec<u8> with pixel values 0-255
 /// - Labels are Vec<u8> with digit values 0-9
-fn load_mnist() -> (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>) {
+pub fn load_mnist() -> (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>) {
     let mnist = MnistBuilder::new()
         .base_path("data/")
         .training_set_length(60_000)
@@ -18,10 +24,10 @@ fn load_mnist() -> (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>) {
         .finalize();
 
     (
-        mnist.trn_img,  // 60,000 * 784 bytes (28x28 images flattened)
-        mnist.trn_lbl,  // 60,000 labels
-        mnist.tst_img,  // 10,000 * 784 bytes
-        mnist.tst_lbl,  // 10,000 labels
+        mnist.trn_img, // 60,000 * 784 bytes (28x28 images flattened)
+        mnist.trn_lbl, // 60,000 labels
+        mnist.tst_img, // 10,000 * 784 bytes
+        mnist.tst_lbl, // 10,000 labels
     )
 }
 
@@ -30,7 +36,7 @@ trait Module {
     fn backward(&mut self, next_layer_err: Array2<f32>) -> Array2<f32>;
 }
 
-#[derive(Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 ///  z = W.a_prev + b
 struct FcLayer {
     input_size: usize,
@@ -109,7 +115,7 @@ impl Module for ReluLayer {
     }
 }
 
-#[derive(Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 struct ConvLayer {
     nb_channels: usize,
     height: usize,
@@ -173,7 +179,7 @@ impl Module for ConvLayer {
     }
 }
 
-#[derive(Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 enum Layer {
     FC(FcLayer),
     ReLU(ReluLayer),
@@ -202,7 +208,7 @@ impl Module for Layer {
     }
 }
 
-#[derive(Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 struct NN {
     // layers: Vec<Box<dyn Module>>,
     layers: Vec<Layer>,
@@ -222,50 +228,108 @@ impl Module for NN {
     }
 }
 
+impl NN {
+    /// Save the neural network to a checkpoint file
+    pub fn to_checkpoint(&self, filepath: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let json = serde_json::to_string_pretty(self)?;
+        let mut file = File::create(filepath)?;
+        file.write_all(json.as_bytes())?;
+        Ok(())
+    }
+
+    /// Load a neural network from a checkpoint file
+    pub fn from_checkpoint(filepath: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let mut file = File::open(filepath)?;
+        let mut contents = String::new();
+        file.read_to_string(&mut contents)?;
+        let nn: NN = serde_json::from_str(&contents)?;
+        Ok(nn)
+    }
+}
+
 fn main() {
-    let mut nn = NN {
-        layers: vec![
-            Layer::FC(FcLayer::new(784, 10)),
-        ],
-    };
+    let args: Vec<String> = std::env::args().collect();
 
-    let (train_images, train_labels, test_images, test_labels) = load_mnist();
-    println!("Train images: {:?}", train_images.len());
-    println!("Train labels: {:?}", train_labels.len());
-    println!("Test images: {:?}", test_images.len());
-    println!("Test labels: {:?}", test_labels.len());
-
-
-    // train loop
-    // TODO: calculate loss and do backpropagation
-    println!("Training...");
-    for (image, _label) in train_images.chunks(784).zip(train_labels.iter()).progress_count(60_000) {
-        let img_f32: Vec<f32> = image.iter().map(|&x| x as f32).collect();
-        let input = Array2::from_shape_vec((1, 784), img_f32).unwrap();
-        let _output = nn.forward(input);
+    if args.len() < 2 {
+        eprintln!("Usage: {} <train|run> [arguments...]", args[0]);
+        eprintln!("  train <steps> <learning_rate> <checkpoint_folder> <checkpoint_stride>  - Train a neural network");
+        eprintln!("  run <checkpoint>                                                         - Run inference using a checkpoint file");
+        std::process::exit(1);
     }
 
-    // test loop
-    // TODO: calculate accuracy
-    println!("Testing...");
-    let mut total_correct = 0;
-    let mut total_samples = 0;
-    for (image, label) in test_images.chunks(784).zip(test_labels.iter()).progress_count(10_000) {
-        let img_f32: Vec<f32> = image.iter().map(|&x| x as f32).collect();
-        let input = Array2::from_shape_vec((1, 784), img_f32).unwrap();
-        let output = nn.forward(input);
-        // Find index of max value (argmax)
-        let predicted_label = output
-            .iter()
-            .enumerate()
-            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
-            .map(|(idx, _)| idx)
-            .unwrap() as u8;
-        if predicted_label == *label {
-            total_correct += 1;
+    match args[1].as_str() {
+        "train" => {
+            if args.len() < 6 {
+                eprintln!(
+                    "Error: 'train' requires gradient steps, learning rate, checkpoint folder, and checkpoint stride"
+                );
+                eprintln!(
+                    "Usage: {} train <steps> <learning_rate> <checkpoint_folder> <checkpoint_stride>",
+                    args[0]
+                );
+                std::process::exit(1);
+            }
+            let train_steps: usize = match args[2].parse() {
+                Ok(val) => val,
+                Err(e) => {
+                    eprintln!("Error: Invalid number of steps '{}': {}", args[2], e);
+                    std::process::exit(1);
+                }
+            };
+            let learning_rate: f32 = match args[3].parse() {
+                Ok(val) => val,
+                Err(e) => {
+                    eprintln!("Error: Invalid learning rate '{}': {}", args[3], e);
+                    std::process::exit(1);
+                }
+            };
+            let checkpoint_folder = &args[4];
+            let checkpoint_stride: usize = match args[5].parse() {
+                Ok(val) => val,
+                Err(e) => {
+                    eprintln!("Error: Invalid checkpoint stride '{}': {}", args[5], e);
+                    std::process::exit(1);
+                }
+            };
+
+            // Validate that train_steps is a multiple of checkpoint_stride
+            if train_steps % checkpoint_stride != 0 {
+                eprintln!(
+                    "Error: train_steps ({}) must be a multiple of checkpoint_stride ({})",
+                    train_steps, checkpoint_stride
+                );
+                std::process::exit(1);
+            }
+
+            if let Err(e) = train::train(
+                train_steps,
+                learning_rate,
+                checkpoint_folder,
+                checkpoint_stride,
+            ) {
+                eprintln!("Error during training: {}", e);
+                std::process::exit(1);
+            }
         }
-        total_samples += 1;
+        "run" => {
+            if args.len() < 3 {
+                eprintln!("Error: 'run' requires a checkpoint file path");
+                eprintln!("Usage: {} run <checkpoint_path>", args[0]);
+                std::process::exit(1);
+            }
+            if let Err(e) = run::run(&args[2]) {
+                eprintln!("Error running inference: {}", e);
+                std::process::exit(1);
+            }
+        }
+        _ => {
+            eprintln!("Error: Unknown command '{}'", args[1]);
+            eprintln!("Usage: {} <train|run> [arguments...]", args[0]);
+            eprintln!(
+                "  train <steps> <learning_rate> <checkpoint_folder> <checkpoint_stride>  - Train a neural network"
+            );
+            eprintln!("  run <checkpoint>                                    - Run inference using a checkpoint file");
+            std::process::exit(1);
+        }
     }
-    let accuracy = total_correct as f32 / total_samples as f32;
-    println!("Accuracy: {:?}", accuracy);
 }
