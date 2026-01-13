@@ -79,9 +79,10 @@ impl Module for FcLayer {
         //  (batch_size, output_size) X (input_size, output_size)^T
         next_layer_err.dot(&self.weights.t()) // (input_size, batch_size)
     }
-    fn step(&mut self, learning_rate: f32) {
-        self.weights -= self.w_grad.unwrap() * learning_rate;
-        self.bias -= self.b_grad.unwrap() * learning_rate;
+    fn step(&mut self, lr: f32) {
+        self.weights -= &(self.w_grad.take().unwrap() * lr);
+
+        self.bias -= &(self.b_grad.take().unwrap() * lr);
         // reset gradients
         self.w_grad = None;
         self.b_grad = None;
@@ -92,25 +93,30 @@ impl Module for FcLayer {
 
 #[derive(Serialize, Deserialize, Debug)]
 struct ReluLayer {
-    last_input: Array2<f32>,
+    last_input: Option<Array2<f32>>,
 }
 
 impl Module for ReluLayer {
     fn forward(&mut self, input: Array2<f32>) -> Array2<f32> {
+        self.last_input = Some(input.clone());
         input.mapv(|x| x.max(0.0))
     }
 
     fn backward(&mut self, next_layer_err: Array2<f32>) -> Array2<f32> {
-        self.last_input.mapv(|x| if x > 0.0 { 1.0 } else { 0.0 }) * next_layer_err
+        self.last_input
+            .clone()
+            .expect("run forward before backward")
+            .mapv(|x| if x > 0.0 { 1.0 } else { 0.0 })
+            * next_layer_err
     }
-    fn step(&mut self, learning_rate: f32) {
+    fn step(&mut self, _learning_rate: f32) {
         self.last_input = None;
     }
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 struct SoftMaxLayer {
-    last_output: Array2<f32>,
+    last_output: Option<Array2<f32>>,
 }
 
 impl Module for SoftMaxLayer {
@@ -124,7 +130,7 @@ impl Module for SoftMaxLayer {
         let out = input.mapv(|x| x.exp()) / sum;
 
         // for backprop
-        self.last_output = out.clone();
+        self.last_output = Some(out.clone());
 
         out
     }
@@ -134,11 +140,11 @@ impl Module for SoftMaxLayer {
         // labels: (batch_size, K), and there are K=9 classes for MNIST
 
         // NOTE: ASSUMING cross-entropy loss, which simplifies nicely with softmax during backprop
-        self.last_output.clone() - labels // TODO: maybe broadcast?
+        self.last_output.clone().unwrap() - labels // TODO: maybe broadcast?
     }
 
-    fn step(&mut self, learning_rate: f32) {
-        todo!()
+    fn step(&mut self, _learning_rate: f32) {
+        self.last_output = None;
     }
 }
 
