@@ -3,7 +3,7 @@ mod train;
 
 use ndarray::prelude::*;
 
-use indicatif::ProgressIterator; // Adds .progress() to iterators (like tqdm)
+// use indicatif::ProgressIterator; // Adds .progress() to iterators (like tqdm)
 use mnist::MnistBuilder;
 use ndarray_rand::rand_distr::Uniform;
 use ndarray_rand::RandomExt;
