@@ -96,6 +96,12 @@ struct ReluLayer {
     last_input: Option<Array2<f32>>,
 }
 
+impl ReluLayer {
+    fn new() -> ReluLayer {
+        ReluLayer { last_input: None }
+    }
+}
+
 impl Module for ReluLayer {
     fn forward(&mut self, input: Array2<f32>) -> Array2<f32> {
         self.last_input = Some(input.clone());
@@ -117,6 +123,12 @@ impl Module for ReluLayer {
 #[derive(Serialize, Deserialize, Debug)]
 struct SoftMaxLayer {
     last_output: Option<Array2<f32>>,
+}
+
+impl SoftMaxLayer {
+    fn new() -> SoftMaxLayer {
+        SoftMaxLayer { last_output: None }
+    }
 }
 
 impl Module for SoftMaxLayer {
