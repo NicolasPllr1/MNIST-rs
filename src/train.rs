@@ -1,5 +1,5 @@
-use indicatif::ProgressIterator;
-use ndarray::{Array1, Array2};
+// use indicatif::ProgressIterator;
+use ndarray::Array2;
 
 use crate::{load_mnist, Module, NN};
 use std::fs;
