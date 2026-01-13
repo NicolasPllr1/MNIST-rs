@@ -11,26 +11,6 @@ use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{Read, Write};
 
-/// Loads the MNIST dataset - downloads automatically if not cached
-/// This is just some black magic which uses the ubyte files in data. Do not touch those.
-/// Returns: (train_images, train_labels, test_images, test_labels)
-/// - Images are Vec<u8> with pixel values 0-255
-/// - Labels are Vec<u8> with digit values 0-9
-pub fn load_mnist() -> (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>) {
-    let mnist = MnistBuilder::new()
-        .base_path("data/")
-        .training_set_length(60_000)
-        .test_set_length(10_000)
-        .finalize();
-
-    (
-        mnist.trn_img, // 60,000 * 784 bytes (28x28 images flattened)
-        mnist.trn_lbl, // 60,000 labels
-        mnist.tst_img, // 10,000 * 784 bytes
-        mnist.tst_lbl, // 10,000 labels
-    )
-}
-
 trait Module {
     fn forward(&mut self, input: Array2<f32>) -> Array2<f32>; // Input is (batch_size, features)
     fn backward(&mut self, next_layer_err: Array2<f32>) -> Array2<f32>;
@@ -230,6 +210,26 @@ impl NN {
         let nn: NN = serde_json::from_str(&contents)?;
         Ok(nn)
     }
+}
+
+/// Loads the MNIST dataset - downloads automatically if not cached
+/// This is just some black magic which uses the ubyte files in data. Do not touch those.
+/// Returns: (train_images, train_labels, test_images, test_labels)
+/// - Images are Vec<u8> with pixel values 0-255
+/// - Labels are Vec<u8> with digit values 0-9
+pub fn load_mnist() -> (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>) {
+    let mnist = MnistBuilder::new()
+        .base_path("data/")
+        .training_set_length(60_000)
+        .test_set_length(10_000)
+        .finalize();
+
+    (
+        mnist.trn_img, // 60,000 * 784 bytes (28x28 images flattened)
+        mnist.trn_lbl, // 60,000 labels
+        mnist.tst_img, // 10,000 * 784 bytes
+        mnist.tst_lbl, // 10,000 labels
+    )
 }
 
 fn main() {
