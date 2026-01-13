@@ -100,7 +100,7 @@ impl Module for FcLayer {
     }
 }
 
-#[derive(Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 struct ReluLayer {
     last_input: Array2<f32>,
 }
@@ -170,11 +170,11 @@ impl ConvLayer {
 }
 
 impl Module for ConvLayer {
-    fn forward(&mut self, input: Array2<f32>) -> Array2<f32> {
+    fn forward(&mut self, _input: Array2<f32>) -> Array2<f32> {
         todo!()
     }
 
-    fn backward(&mut self, _post_grad: Array2<f32>) -> Array2<f32> {
+    fn backward(&mut self, _next_layer_err: Array2<f32>) -> Array2<f32> {
         todo!()
     }
 }
@@ -223,7 +223,7 @@ impl Module for NN {
         x
     }
 
-    fn backward(&mut self, _post_grad: Array2<f32>) -> Array2<f32> {
+    fn backward(&mut self, _next_layer_err: Array2<f32>) -> Array2<f32> {
         todo!()
     }
 }
