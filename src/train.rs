@@ -1,17 +1,28 @@
-use ndarray::Array1;
+use indicatif::ProgressIterator;
+use ndarray::{Array1, Array2};
 
-use crate::{Module, NN};
+use crate::{load_mnist, Module, NN};
 use std::fs;
 use std::path::Path;
 
-type CostFunction = fn(expected_y: &Array1<f32>, actual_y: &Array1<f32>) -> Array1<f32>;
+type CostFunction = fn(labels: &[u8], actual_y: &Array2<f32>) -> Array2<f32>;
 
-fn least_squares(expected_y: &Array1<f32>, actual_y: &Array1<f32>) -> Array1<f32> {
-    expected_y - actual_y.mapv(|x| x * x)
+fn least_squares(labels: &[u8], actual_y: &Array2<f32>) -> Array2<f32> {
+    let batch_size = labels.len();
+    let num_classes = actual_y.ncols();
+
+    // Convert labels to one-hot encoding Array2
+    let mut expected_y = Array2::zeros((batch_size, num_classes));
+    for (i, &label) in labels.iter().enumerate() {
+        expected_y[(i, label as usize)] = 1.0;
+    }
+
+    // Calculate least squares for each sample in batch: (expected - actual)^2
+    (expected_y - actual_y).mapv(|x| x * x)
 }
 
 trait Optimizer {
-    fn step(&self, nn: &NN, cost_function: CostFunction);
+    fn step(&self, nn: &mut NN, cost_function: CostFunction, labels: &[u8], output: &Array2<f32>);
 }
 
 struct SGD {
@@ -19,14 +30,18 @@ struct SGD {
 }
 
 impl Optimizer for SGD {
-    fn step(&self, nn: &NN, cost_function: CostFunction) {
+    fn step(&self, nn: &mut NN, cost_function: CostFunction, labels: &[u8], output: &Array2<f32>) {
         let num_layers = nn.layers.len();
-        // TODO: Initialize prev_grad properly
-        let mut prev_grad = cost_function(???);
-        for layer in (0..num_layers).rev() {
-            prev_grad = nn.layers[layer].backward(prev_grad);
+        // Calculate loss for the batch
+        let mut prev_grad = cost_function(labels, output);
+        // Backpropagate through layers in reverse order
+        for layer_idx in (0..num_layers).rev() {
+            prev_grad = nn.layers[layer_idx].backward(prev_grad);
         }
 
+        for layer in (nn.layers) {
+            layer.step(self.learning_rate);
+        }
     }
 }
 
@@ -43,6 +58,17 @@ pub fn train(
     // TODO: Implement training logic
     // For now, use a hardcoded neural network
     let mut nn = NN { layers: vec![] };
+
+    // Load MNIST dataset
+    let (train_images, train_labels, _test_images, _test_labels) = load_mnist();
+    println!("Loaded {} training images", train_images.len() / 784);
+
+    // Create iterator over training data
+    let train_data = train_images
+        .chunks(784)
+        .zip(train_labels.iter())
+        .cycle() // Cycle through the dataset for multiple epochs
+        .take(train_steps);
 
     // Original main() code from before rebase:
     /*
@@ -96,11 +122,18 @@ pub fn train(
 
     let optimizer = SGD { learning_rate };
 
-    for step in 0..train_steps {
+    for (step, (image, label)) in train_data.enumerate() {
+        // Convert image from Vec<u8> to Array2<f32>
+        let img_f32: Vec<f32> = image.iter().map(|&x| x as f32 / 255.0).collect(); // Normalize to [0, 1]
+        let input = Array2::from_shape_vec((1, 784), img_f32)
+            .map_err(|e| format!("Failed to create input array: {}", e))?;
 
-        // Run forward pass on the dataloader?
+        // Run forward pass (output shape: (batch_size, num_classes))
+        let output = nn.forward(input);
 
-        optimizer.step(&nn, least_squares);
+        // Calculate loss and do backpropagation
+        // The cost function will convert labels to one-hot encoding internally
+        optimizer.step(&mut nn, least_squares, &[*label], &output);
 
         // Save checkpoint every checkpoint_stride steps
         if (step + 1) % checkpoint_stride == 0 {
