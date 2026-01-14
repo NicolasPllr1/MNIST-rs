@@ -160,9 +160,79 @@ impl Module for SoftMaxLayer {
     }
 }
 
+/// Padding with 0s, dilation=1
+/// https://docs.pytorch.org/docs/stable/generated/torch.nn.Conv2d.html
+#[derive(Serialize, Deserialize, Debug)]
+struct Conv2Dlayer {
+    in_channels: usize,
+    out_channels: usize,
+    kernel_size: (usize, usize),
+    stride: usize,
+    // weights
+    k: Array4<f32>, // (in_channels, out_channels, kernel_size)
+    b: Array1<f32>, // (out_channels) (1 bias per output channel)
+    // for backprop
+    last_input: Option<Array2<f32>>, // (batch_size, in_channels, _, _)
+    //
+    k_grad: Option<Array2<f32>>, // (in_channels, out_channels, kernel_size)
+    b_grad: Option<Array1<f32>>, // (out_channels)
+}
+
+impl Conv2Dlayer {
+    fn new(
+        in_channels: usize,
+        out_channels: usize,
+        kernel_size: (usize, usize),
+        stride: usize,
+    ) -> Conv2Dlayer {
+        Conv2Dlayer {
+            in_channels,
+            out_channels,
+            kernel_size,
+            stride,
+            //
+            k: Conv2Dlayer::init_kernel(in_channels, out_channels, kernel_size),
+            b: Conv2Dlayer::init_bias(out_channels),
+            //
+            last_input: None,
+            //
+            k_grad: None,
+            b_grad: None,
+        }
+    }
+    fn init_bias(output_size: usize) -> Array1<f32> {
+        return Array1::random(output_size, Uniform::new(-1.0, 1.0).unwrap());
+    }
+    fn init_2d_mat(input_size: usize, output_size: usize) -> Array2<f32> {
+        return Array2::random((input_size, output_size), Uniform::new(-1.0, 1.0).unwrap());
+    }
+    fn init_kernel(
+        _in_channels: usize,
+        _out_channels: usize,
+        _kernel_size: (usize, usize),
+    ) -> Array4<f32> {
+        todo!()
+    }
+}
+
+impl Module for Conv2Dlayer {
+    fn forward(&mut self, _input: Array2<f32>) -> Array2<f32> {
+        todo!()
+    }
+
+    fn backward(&mut self, _next_layer_err: Array2<f32>) -> Array2<f32> {
+        todo!()
+    }
+
+    fn step(&mut self, _learning_rate: f32) {
+        todo!()
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 enum Layer {
     FC(FcLayer),
+    Conv(Conv2Dlayer),
     ReLU(ReluLayer),
     Softmax(SoftMaxLayer),
 }
@@ -171,6 +241,7 @@ impl Module for Layer {
     fn forward(&mut self, input: Array2<f32>) -> Array2<f32> {
         match self {
             Layer::FC(l) => l.forward(input),
+            Layer::Conv(l) => l.forward(input),
             Layer::ReLU(l) => l.forward(input),
             Layer::Softmax(l) => l.forward(input),
         }
@@ -178,15 +249,17 @@ impl Module for Layer {
 
     fn backward(&mut self, next_layer_err: Array2<f32>) -> Array2<f32> {
         match self {
-            Layer::FC(l) => l.backward(next_layer_err),
-            Layer::ReLU(l) => l.backward(next_layer_err),
-            Layer::Softmax(l) => l.backward(next_layer_err),
+            Layer::FC(l) => l.backward(dz),
+            Layer::Conv(l) => l.backward(dz),
+            Layer::ReLU(l) => l.backward(dz),
+            Layer::Softmax(l) => l.backward(dz),
         }
     }
 
     fn step(&mut self, lr: f32) {
         match self {
             Layer::FC(l) => l.step(lr),
+            Layer::Conv(l) => l.step(lr),
             Layer::ReLU(l) => l.step(lr),
             Layer::Softmax(l) => l.step(lr),
         }
