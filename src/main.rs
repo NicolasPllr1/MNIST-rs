@@ -139,7 +139,7 @@ impl Module for SoftMaxLayer {
         out.mapv_inplace(|x| x.exp());
 
         let sum = out.sum_axis(Axis(1));
-        let out = input.mapv(|x| x.exp()) / sum;
+        let out = out / sum;
 
         // for backprop
         self.last_output = Some(out.clone());
