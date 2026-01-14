@@ -179,14 +179,14 @@ impl Module for SoftMaxLayer {
     }
 }
 
-/// Padding with 0s, dilation=1
-/// https://docs.pytorch.org/docs/stable/generated/torch.nn.Conv2d.html
+/// 2D convolution layer (without padding and with stride=1).
+/// pytorch doc: https://docs.pytorch.org/docs/stable/generated/torch.nn.Conv2d.html
 #[derive(Serialize, Deserialize, Debug)]
 struct Conv2Dlayer {
-    in_channels: usize,
-    out_channels: usize,
-    kernel_size: (usize, usize),
-    stride: usize,
+    in_channels: usize,          // Number of channels in the input image
+    out_channels: usize,         // Number of channels produced by the convolution
+    kernel_size: (usize, usize), // Size of all the 2d convolving kernels used in this layer.
+    stride: usize,               // Stride of the convolution. Will be hardocoded to 1 for now.
     // weights
     k: Array4<f32>, // (in_channels, out_channels, kernel_size)
     b: Array1<f32>, // (out_channels) (1 bias per output channel)
@@ -198,17 +198,12 @@ struct Conv2Dlayer {
 }
 
 impl Conv2Dlayer {
-    fn new(
-        in_channels: usize,
-        out_channels: usize,
-        kernel_size: (usize, usize),
-        stride: usize,
-    ) -> Conv2Dlayer {
+    fn new(in_channels: usize, out_channels: usize, kernel_size: (usize, usize)) -> Conv2Dlayer {
         Conv2Dlayer {
             in_channels,
             out_channels,
             kernel_size,
-            stride,
+            stride: 1,
             //
             k: Conv2Dlayer::init_kernel(in_channels, out_channels, kernel_size),
             b: Conv2Dlayer::init_bias(out_channels),
