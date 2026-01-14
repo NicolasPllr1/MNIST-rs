@@ -12,7 +12,7 @@ use std::fs::File;
 use std::io::{Read, Write};
 
 trait Module {
-    fn forward(&mut self, input: Array2<f32>) -> Array2<f32>; // Input is (batch_size, features)
+    fn forward(&mut self, input: ArrayD<f32>) -> ArrayD<f32>; // Input is (batch_size, features)
     /// Backward pass
     ///
     /// The `backward` function receives a gradient `dz` which corresponds to dLoss/dz,
@@ -32,7 +32,7 @@ trait Module {
     /// directly computes the matrix-vector product of interest.
     /// - the shape of the function output - which corresponds to dLoss/dx - is the same shape
     /// as the layer inputs.
-    fn backward(&mut self, dz: Array2<f32>) -> Array2<f32>;
+    fn backward(&mut self, dz: ArrayD<f32>) -> ArrayD<f32>;
     fn step(&mut self, learning_rate: f32);
 }
 
@@ -74,15 +74,24 @@ impl FcLayer {
 }
 
 impl Module for FcLayer {
-    fn forward(&mut self, input: Array2<f32>) -> Array2<f32> {
+    fn forward(&mut self, input: ArrayD<f32>) -> ArrayD<f32> {
         // store input for backprop computations
+        let input = input
+            .into_dimensionality::<Ix2>()
+            .expect("FC layer input should be 2D");
         self.last_input = Some(input.clone()); // cloning ...
 
         // (batch_size, input_size) X (input_size, output_size) = (batch_size, output_size)
-        input.dot(&self.weights) + self.bias.clone()
+        let out = input.dot(&self.weights) + self.bias.clone();
+        let out = out.into_dyn(); // dynamic array type
+        out
     }
 
-    fn backward(&mut self, dz: Array2<f32>) -> Array2<f32> {
+    fn backward(&mut self, dz: ArrayD<f32>) -> ArrayD<f32> {
+        let dz = dz
+            .into_dimensionality::<Ix2>()
+            .expect("FC layer backward input should be 2D");
+
         let last_input = self
             .last_input
             .take()
@@ -96,7 +105,9 @@ impl Module for FcLayer {
 
         //  What needs to be passed on to the 'previous' layer in the network
         //  (batch_size, output_size) X (input_size, output_size)^T
-        dz.dot(&self.weights.t()) // (input_size, batch_size)
+        let new_dz = dz.dot(&self.weights.t()); // (input_size, batch_size)
+        let new_dz = new_dz.into_dyn(); // dynamic array type
+        new_dz
     }
     fn step(&mut self, lr: f32) {
         self.weights -= &(self.w_grad.take().unwrap() * lr);
@@ -112,7 +123,7 @@ impl Module for FcLayer {
 
 #[derive(Serialize, Deserialize, Debug)]
 struct ReluLayer {
-    last_input: Option<Array2<f32>>,
+    last_input: Option<ArrayD<f32>>,
 }
 
 impl ReluLayer {
@@ -122,12 +133,12 @@ impl ReluLayer {
 }
 
 impl Module for ReluLayer {
-    fn forward(&mut self, input: Array2<f32>) -> Array2<f32> {
+    fn forward(&mut self, input: ArrayD<f32>) -> ArrayD<f32> {
         self.last_input = Some(input.clone());
         input.mapv(|x| x.max(0.0))
     }
 
-    fn backward(&mut self, dz: Array2<f32>) -> Array2<f32> {
+    fn backward(&mut self, dz: ArrayD<f32>) -> ArrayD<f32> {
         self.last_input
             .clone()
             .expect("run forward before backward")
@@ -151,7 +162,7 @@ impl SoftMaxLayer {
 }
 
 impl Module for SoftMaxLayer {
-    fn forward(&mut self, input: Array2<f32>) -> Array2<f32> {
+    fn forward(&mut self, input: ArrayD<f32>) -> ArrayD<f32> {
         let max = input.fold_axis(Axis(1), f32::NEG_INFINITY, |&a, &b| a.max(b));
         // exp(x - max)
         let mut out = input.clone() - max.insert_axis(Axis(1));
@@ -161,12 +172,16 @@ impl Module for SoftMaxLayer {
         let out = out / sum;
 
         // for backprop
-        self.last_output = Some(out.clone());
+        self.last_output = Some(
+            out.clone()
+                .into_dimensionality::<Ix2>()
+                .expect("Softmax output should be 2D"),
+        );
 
         out
     }
 
-    fn backward(&mut self, labels: Array2<f32>) -> Array2<f32> {
+    fn backward(&mut self, labels: ArrayD<f32>) -> ArrayD<f32> {
         // NOTE: input to the softmax backward is the labels
         // labels: (batch_size, K), and there are K=9 classes for MNIST
 
@@ -191,7 +206,7 @@ struct Conv2Dlayer {
     k: Array4<f32>, // (in_channels, out_channels, kernel_size)
     b: Array1<f32>, // (out_channels) (1 bias per output channel)
     // for backprop
-    last_input: Option<Array2<f32>>, // (batch_size, in_channels, _, _)
+    last_input: Option<Array4<f32>>, // (batch_size, in_channels, height, width)
     //
     k_grad: Option<Array2<f32>>, // (in_channels, out_channels, kernel_size)
     b_grad: Option<Array1<f32>>, // (out_channels)
@@ -236,11 +251,82 @@ impl Conv2Dlayer {
 }
 
 impl Module for Conv2Dlayer {
-    fn forward(&mut self, _input: Array2<f32>) -> Array2<f32> {
-        todo!()
+    fn forward(&mut self, input: ArrayD<f32>) -> ArrayD<f32> {
+        // input: (batch_size, in_channels, height, width)
+        let input = input
+            .into_dimensionality::<Ix4>()
+            .expect("Conv layer input should be 4D");
+
+        self.last_input = Some(input.clone()); // caching this for backprop later on
+
+        let (batch_size, in_channels, in_height, in_width) = input.dim();
+        let out_height = in_height - self.kernel_size.0 + 1;
+        let out_width = in_height - self.kernel_size.1 + 1;
+        let mut out = Array4::zeros((batch_size, self.out_channels, out_height, out_width));
+
+        assert!(in_channels == self.in_channels);
+
+        // NOTE: maybe switch batch and channels dim for easier operations?
+
+        // Preparing the input data for computing the convolution.
+        // To compute each output feature map, we want to do one big matric-vector product:
+        // output_features_map = MODIFIED_input_feature_maps X MODIFIED_kernel_matrix
+
+        assert!(self.kernel_size.0 == self.kernel_size.1);
+        let k = self.kernel_size.0;
+
+        // Get kernel matrix
+        // (in_channels, out_channels, k, k) -> (out_channels, in_channels*k^2)
+        let kernels_mat = self
+            .k
+            .view()
+            .into_shape_with_order((self.out_channels, in_channels * k * k))
+            .expect("Kernel matrix should be re-shapable to (out_channels, in_channels*k*k)");
+
+        let nb_patches = (in_height - k + 1) * (in_width - k + 1); // 'valid' convolution with stride=1
+
+        for (batch_idx, input_feature_maps) in input.outer_iter().enumerate() {
+            // Get input patches: (in_channels, in_height, in_width) -> (L, in_channels*k^2)
+            // where (k,k) is the kernel size and L the number of patch locations.
+
+            // [( in_channels, k, k)] of length L
+            let patches = input_feature_maps.windows((in_channels, k, k));
+            let mut patches_mat = Array2::zeros((nb_patches, in_channels * k * k));
+
+            // building the patch matrix of size (L, in_channels*k*k)
+            for (mut patch_mat_row, patch_view) in patches_mat.rows_mut().into_iter().zip(patches) {
+                patch_mat_row.assign(&patch_view.flatten()); // patch: (in_channels, k, k)
+            }
+
+            // (out_channels, L) = (out_channels, in_channels*k^2) dot (L, in_channels*k*k)^T
+            let mut flattened_output_feature_map = kernels_mat.dot(&patches_mat.t());
+
+            // Add bias: same bias per output_channel
+            // --> (out_channels, 1) broadcasted to (out_channels, L)
+            flattened_output_feature_map += &self.b.view().insert_axis(Axis(1));
+
+            // Re-construct the output feature map: re-shaping
+            // the 1d vectors of length L into (out_height, out_width) 2d arrays
+            // (out_channels, L) -> (out_channels, out_height, out_width)
+
+            assert!(out_width * out_height == nb_patches); // nb_patches = 'L'
+            let output_feature_map = flattened_output_feature_map.into_shape_with_order((
+                self.out_channels,
+                out_height,
+                out_width,
+            )).expect("Flattened output feature map should be reshapable into (out_channels, out_width, out_height) from (out_channels, L) where L is the number of patches");
+
+            // fill in the batch output feature maps
+            out.index_axis_mut(Axis(0), batch_idx)
+                .assign(&output_feature_map);
+        }
+
+        let out = out.into_dyn();
+        out
     }
 
-    fn backward(&mut self, _dz: Array2<f32>) -> Array2<f32> {
+    fn backward(&mut self, _dz: ArrayD<f32>) -> ArrayD<f32> {
+        // dz: (batch_size, out_channels, height, width)
         todo!()
     }
 
@@ -258,7 +344,7 @@ enum Layer {
 }
 
 impl Module for Layer {
-    fn forward(&mut self, input: Array2<f32>) -> Array2<f32> {
+    fn forward(&mut self, input: ArrayD<f32>) -> ArrayD<f32> {
         match self {
             Layer::FC(l) => l.forward(input),
             Layer::Conv(l) => l.forward(input),
@@ -267,7 +353,7 @@ impl Module for Layer {
         }
     }
 
-    fn backward(&mut self, dz: Array2<f32>) -> Array2<f32> {
+    fn backward(&mut self, dz: ArrayD<f32>) -> ArrayD<f32> {
         match self {
             Layer::FC(l) => l.backward(dz),
             Layer::Conv(l) => l.backward(dz),
@@ -293,7 +379,7 @@ struct NN {
 }
 
 impl Module for NN {
-    fn forward(&mut self, input: Array2<f32>) -> Array2<f32> {
+    fn forward(&mut self, input: ArrayD<f32>) -> ArrayD<f32> {
         let mut x = input;
         for layer in &mut self.layers {
             x = layer.forward(x);
@@ -301,7 +387,7 @@ impl Module for NN {
         x
     }
 
-    fn backward(&mut self, dz: Array2<f32>) -> Array2<f32> {
+    fn backward(&mut self, dz: ArrayD<f32>) -> ArrayD<f32> {
         let mut x = dz;
         // Iterate layers in reverse order, mutate each as we go
         for layer in self.layers.iter_mut().rev() {
