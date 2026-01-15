@@ -70,7 +70,7 @@ impl Optimizer for SGD {
         // Calculate loss and gradient for the batch
         let (loss, grad) = cost_function(labels, output);
         // Backpropagate through layers in reverse order
-        nn.backward(grad);
+        nn.backward(grad.into_dyn());
 
         nn.step(self.learning_rate);
 
@@ -91,9 +91,9 @@ pub fn train(
 
     let mut nn = NN {
         layers: vec![
-            Layer::FC(FcLayer::new(28 * 28, 3)),
+            Layer::FC(FcLayer::new(28 * 28, 100)),
             Layer::ReLU(ReluLayer::new()),
-            Layer::FC(FcLayer::new(3, 10)),
+            Layer::FC(FcLayer::new(100, 10)),
             Layer::Softmax(SoftMaxLayer::new()),
         ],
     };
@@ -199,11 +199,18 @@ pub fn train(
                 .map_err(|e| format!("Failed to create input array: {}", e))?;
 
             // Run forward pass (output shape: (batch_size, num_classes))
-            let output = nn.forward(input);
+            let output = nn.forward(input.into_dyn());
 
             // Calculate loss and do backpropagation on the batch
             // The cost function will convert labels to one-hot encoding internally
-            let loss = optimizer.step(&mut nn, cross_entropy, &batch_labels, &output);
+            let loss = optimizer.step(
+                &mut nn,
+                cross_entropy,
+                &batch_labels,
+                &output
+                    .into_dimensionality::<Ix2>()
+                    .expect("Output should be castable to 2D"),
+            );
 
             // Accumulate loss for epoch average
             epoch_loss_sum += loss.mean().unwrap();
@@ -230,10 +237,12 @@ pub fn train(
                 let input = Array2::from_shape_vec((1, 784), img_f32)
                     .map_err(|e| format!("Failed to create test input array: {}", e))?;
 
-                let output = nn.forward(input);
+                let output = nn.forward(input.into_dyn());
 
                 // Find index of max value (argmax) - predicted label
                 let predicted_label = output
+                    .into_dimensionality::<Ix2>()
+                    .expect("Output shoud be castable to 2D")
                     .row(0)
                     .iter()
                     .enumerate()
