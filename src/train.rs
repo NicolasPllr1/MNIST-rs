@@ -1,7 +1,9 @@
 // use indicatif::ProgressIterator;
 use ndarray::Array2;
 
-use crate::{load_mnist, FcLayer, Layer, Module, ReluLayer, SoftMaxLayer, NN};
+use crate::{
+    load_mnist, Conv2Dlayer, FcLayer, FlattenLayer, Layer, Module, ReluLayer, SoftMaxLayer, NN,
+};
 use ndarray::prelude::*;
 use rand::seq::SliceRandom;
 use rand::thread_rng;
@@ -73,9 +75,12 @@ pub fn train(
 
     let mut nn = NN {
         layers: vec![
-            Layer::FC(FcLayer::new(28 * 28, 100)),
+            Layer::Conv(Conv2Dlayer::new(1, 10, (5, 5))), // feature maps: (28x28) --> (24,24)
             Layer::ReLU(ReluLayer::new()),
-            Layer::FC(FcLayer::new(100, 10)),
+            Layer::Conv(Conv2Dlayer::new(10, 20, (2, 2))), // feature maps: (24x24) --> (23,23)
+            Layer::ReLU(ReluLayer::new()),
+            Layer::Flatten(FlattenLayer::new()),
+            Layer::FC(FcLayer::new(20 * 23 * 23, 10)),
             Layer::Softmax(SoftMaxLayer::new()),
         ],
     };
