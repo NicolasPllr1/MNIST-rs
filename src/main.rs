@@ -336,11 +336,45 @@ impl Module for Conv2Dlayer {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+struct FlattenLayer {
+    last_input: Option<ArrayD<f32>>,
+}
+
+impl FlattenLayer {
+    fn new() -> FlattenLayer {
+        FlattenLayer { last_input: None }
+    }
+}
+
+impl Module for FlattenLayer {
+    fn forward(&mut self, input: ArrayD<f32>) -> ArrayD<f32> {
+        self.last_input = Some(input.clone());
+
+        // Assuming the input is a batch of feature maps
+        // input: (batch_size, in_channels, height, width)
+        // we want output: (batch_size, in_channels*height*width)
+        let output = input
+            .into_dimensionality::<Ix2>()
+            .expect("flatten input to 2D array should not fail")
+            .into_dyn();
+        output
+    }
+
+    fn backward(&mut self, _dz: ArrayD<f32>) -> ArrayD<f32> {
+        todo!()
+    }
+    fn step(&mut self, _learning_rate: f32) {
+        self.last_input = None;
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug)]
 enum Layer {
     FC(FcLayer),
     Conv(Conv2Dlayer),
     ReLU(ReluLayer),
     Softmax(SoftMaxLayer),
+    Flatten(FlattenLayer),
 }
 
 impl Module for Layer {
@@ -350,6 +384,7 @@ impl Module for Layer {
             Layer::Conv(l) => l.forward(input),
             Layer::ReLU(l) => l.forward(input),
             Layer::Softmax(l) => l.forward(input),
+            Layer::Flatten(l) => l.forward(input),
         }
     }
 
@@ -359,6 +394,7 @@ impl Module for Layer {
             Layer::Conv(l) => l.backward(dz),
             Layer::ReLU(l) => l.backward(dz),
             Layer::Softmax(l) => l.backward(dz),
+            Layer::Flatten(l) => l.backward(dz),
         }
     }
 
@@ -368,6 +404,7 @@ impl Module for Layer {
             Layer::Conv(l) => l.step(lr),
             Layer::ReLU(l) => l.step(lr),
             Layer::Softmax(l) => l.step(lr),
+            Layer::Flatten(l) => l.step(lr),
         }
     }
 }
