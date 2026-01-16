@@ -256,72 +256,99 @@ impl Conv2Dlayer {
 }
 
 impl Module for Conv2Dlayer {
+    /// Forward for the convolution layer using the 'img2col' method.
+    ///
+    /// The 'img2col' idea is to map the convolution operation to a single matmul.
+    /// The goal is to compute OUT = kernels_mat x patches_mat, where patches_mat
+    /// is a matrix where columns correspond to entire input patches to the convolution kernel.
+    /// In terme of size (ommiting about the batch dim to simplify):
+    /// - kernels_mat: (out_channels, channels_in * k^2)
+    /// - patches_mat: (channels_in * k ^2, locations)
+    /// So their multiplication yiels: (out_channels, locations)
+    /// By locations, we means every valid coordinate in the input feature map volume
+    /// where the kernel can be used to compute a value through the convolution.
+    ///
+    /// Input: (batch_size, in_channels, height, width)
+    /// Output: (batch_size, out_channels, height-k+1, width-k+1), where kernel_size=(k,k)
     fn forward(&mut self, input: ArrayD<f32>) -> ArrayD<f32> {
-        // input: (batch_size, in_channels, height, width)
         let input = input
             .into_dimensionality::<Ix4>()
             .expect("Conv layer input should be 4D");
 
         self.last_input = Some(input.clone()); // caching this for backprop later on
 
+        // Using input dimensions to initialize the output 4D tensor
         let (batch_size, in_channels, in_height, in_width) = input.dim();
-        let out_height = in_height - self.kernel_size.0 + 1;
-        let out_width = in_height - self.kernel_size.1 + 1;
-        let mut out = Array4::zeros((batch_size, self.out_channels, out_height, out_width));
-
         assert!(in_channels == self.in_channels);
+        assert!(self.kernel_size.0 == self.kernel_size.1);
+        let k = self.kernel_size.0;
+        let out_height = in_height - k + 1;
+        let out_width = in_height - k + 1;
+        let mut out = Array4::zeros((batch_size, self.out_channels, out_height, out_width));
 
         // NOTE: maybe switch batch and channels dim for easier operations?
 
-        // Preparing the input data for computing the convolution.
-        // To compute each output feature map, we want to do one big matric-vector product:
-        // output_features_map = MODIFIED_input_feature_maps X MODIFIED_kernel_matrix
+        // Preparing the 'kernels' matrix for the img2col method
+        // kernels_mat: (out_channels, channels_in * k ^2)
+        // - Each row is associated with a single output channel
+        // - Each row is the vector of kernel weights associated to every input channels
 
-        assert!(self.kernel_size.0 == self.kernel_size.1);
-        let k = self.kernel_size.0;
-
-        // Get kernel matrix
+        // The transformation we want to do:
         // (in_channels, out_channels, k, k) -> (out_channels, in_channels*k^2)
         let kernels_mat = self
             .k
             .view()
             .into_shape_with_order((self.out_channels, in_channels * k * k))
-            .expect("Kernel matrix should be re-shapable to (out_channels, in_channels*k*k)");
+            .expect("Kernel dimensions are compatible with the img2col target shape (out_channels, in_channels*k*k)");
 
-        let nb_patches = (in_height - k + 1) * (in_width - k + 1); // 'valid' convolution with stride=1
+        // Preparing the 'patches' matrix for the img2col method.
+        // patches_mat: (in_channels * k^2, locations)^T
+        // - Each column is associated to a single location where the kernels will be applied
+        // - Each column is the flattened vector of input values for the given location accross all input channels
+        //
+        // We will build this 'patches' matrix by iterating over the locations in the input volume.
+        // Each input location (in_channels, k, k) we will get flattened to (in_channels*k*k) and
+        // inserted in the patches_matrix as a column.
 
+        // The number of locations for a 'valid' convolution with stride=1
+        let nb_locations = (in_height - k + 1) * (in_width - k + 1);
+
+        // Computing the 'img2col' matmul on a per-batch basis.
+        // So we are computing the convolution one item from the batch at a time, and progressively filling the output matrix.
         for (batch_idx, input_feature_maps) in input.outer_iter().enumerate() {
             // Get input patches: (in_channels, in_height, in_width) -> (L, in_channels*k^2)
             // where (k,k) is the kernel size and L the number of patch locations.
 
-            // [( in_channels, k, k)] of length L
+            // There are L patches of size (in_channels, k, k)
             let patches = input_feature_maps.windows((in_channels, k, k));
-            let mut patches_mat = Array2::zeros((nb_patches, in_channels * k * k));
+            // We just want to lay them in a matrix where each row is a flattened patch
+            let mut patches_mat = Array2::zeros((nb_locations, in_channels * k * k));
 
-            // building the patch matrix of size (L, in_channels*k*k)
-            for (mut patch_mat_row, patch_view) in patches_mat.rows_mut().into_iter().zip(patches) {
-                patch_mat_row.assign(&patch_view.flatten()); // patch: (in_channels, k, k)
+            // For each patch, we flatten it and put it as a row in the patches matrix
+            for (mut patches_mat_row, patch) in patches_mat.rows_mut().into_iter().zip(patches) {
+                patches_mat_row.assign(&patch.flatten());
             }
 
-            // (out_channels, L) = (out_channels, in_channels*k^2) dot (L, in_channels*k*k)^T
+            // The "img2col" matmul which implement the convolution as a single GEMM.
+            // (out_channels, L) = (out_channels, in_channels*k^2) dot (L, in_channels*k^2)^T
             let mut flattened_output_feature_map = kernels_mat.dot(&patches_mat.t());
 
             // Add bias: same bias per output_channel
             // --> (out_channels, 1) broadcasted to (out_channels, L)
             flattened_output_feature_map += &self.b.view().insert_axis(Axis(1));
 
-            // Re-construct the output feature map: re-shaping
-            // the 1d vectors of length L into (out_height, out_width) 2d arrays
+            // Re-shaping the output feature map
             // (out_channels, L) -> (out_channels, out_height, out_width)
 
-            assert!(out_width * out_height == nb_patches); // nb_patches = 'L'
+            assert!(out_width * out_height == nb_locations);
             let output_feature_map = flattened_output_feature_map.into_shape_with_order((
                 self.out_channels,
                 out_height,
                 out_width,
-            )).expect("Flattened output feature map should be reshapable into (out_channels, out_width, out_height) from (out_channels, L) where L is the number of patches");
+            )).expect("Flattened output feature map dimensions are compatible with the 3d shape (out_channels, out_width, out_height)");
 
-            // fill in the batch output feature maps
+            // Add this batch output feature maps to the 4D output tensor
+            // (we are computing the convolution one item from the batch at a time)
             out.index_axis_mut(Axis(0), batch_idx)
                 .assign(&output_feature_map);
         }
