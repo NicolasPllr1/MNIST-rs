@@ -211,7 +211,7 @@ struct Conv2Dlayer {
     kernels_mat: Array2<f32>, // Layout for img2col: (out_channels, in_channels*k^2)
     b: Array1<f32>,           // One bias per output channel: (output_channels)
     // for backprop
-    last_input: Option<Array4<f32>>, // (batch_size, in_channels, height, width)
+    last_input: Option<Array3<f32>>, // The 'patches' matrix in img2col: (batch_size, locations, in_channels * k^2)
     //
     k_grad: Option<Array2<f32>>, // (in_channels, out_channels, kernel_size)
     b_grad: Option<Array1<f32>>, // (out_channels)
@@ -269,11 +269,10 @@ impl Module for Conv2Dlayer {
     /// Input: (batch_size, in_channels, height, width)
     /// Output: (batch_size, out_channels, height-k+1, width-k+1), where kernel_size=(k,k)
     fn forward(&mut self, input: ArrayD<f32>) -> ArrayD<f32> {
+        println!("[forward] [conv] input: {:?}", input.shape());
         let input = input
             .into_dimensionality::<Ix4>()
             .expect("Conv layer input should be 4D");
-
-        self.last_input = Some(input.clone()); // caching this for backprop later on
 
         // Using input dimensions to initialize the output 4D tensor
         let (batch_size, in_channels, in_height, in_width) = input.dim();
@@ -303,6 +302,10 @@ impl Module for Conv2Dlayer {
         // The number of locations for a 'valid' convolution with stride=1
         let nb_locations = (in_height - k + 1) * (in_width - k + 1);
 
+        // Init the 'last input' which corresponds to the entire patches matrix.
+        // Will be needed during backprop.
+        let mut last_input = Array3::<f32>::zeros((batch_size, nb_locations, in_channels * k * k));
+
         // Computing the 'img2col' matmul on a per-batch basis.
         // So we are computing the convolution one item from the batch at a time, and progressively filling the output matrix.
         for (batch_idx, input_feature_maps) in input.outer_iter().enumerate() {
@@ -318,6 +321,11 @@ impl Module for Conv2Dlayer {
             for (mut patches_mat_row, patch) in patches_mat.rows_mut().into_iter().zip(patches) {
                 patches_mat_row.assign(&patch.flatten());
             }
+
+            // Cache this batch 'patches' matrix
+            last_input
+                .slice_mut(s![batch_idx, .., ..])
+                .assign(&patches_mat);
 
             // The "img2col" matmul which implement the convolution as a single GEMM.
             // (out_channels, L) = (out_channels, in_channels*k^2) dot (L, in_channels*k^2)^T
@@ -365,17 +373,17 @@ impl Module for Conv2Dlayer {
     ///
     /// Gradients:
     /// - dL/dkernels_mat = dL/dconv_output * (dconv_output/dkernels_mat)^T = dz dot patches_mat^T.
-    /// In sizes: (out_channels, channels_in * k^2) = (out_channels, locations) dot (channels_in * k^2, locations)^T.
+    /// In sizes: (out_channels, in_channels * k^2) = (out_channels, locations) dot (in_channels * k^2, locations)^T.
     /// Note that dz here refered to the reshaped incoming dz.
     ///
-    /// - DL/dbias : (output_channels) = dz.sum(-1).sum(-1)
+    /// - DL/dbias : (out_channels) = dz.sum(-1).sum(0)
     /// For the bias, we want to reduce for every output channels all the gradient values at every
-    /// location, since the same bias was added to all these location (for a given output channel).
+    /// location, since the same bias was added to all these location (for a given output channel), and also sum over the batch dimension.
     ///
     /// - dL/dinput ? We compute dL/dpatches_mat and then reshape it for the input matrix.
-    /// - DL/dpatches_mat = doutput/dinput dot dL/doutput = kernels_mat dot dz^T
-    /// in sizes: (channels_in * k^2, locations) = (out_channels, in_channels * k^2)^T dot (out_channels, locations)
-    /// Which we then re-shape to: (channels_in, height, width).
+    /// - DL/dpatches_mat = doutput/dinput dot dL/doutput = kernels_mat^T dot dz
+    /// in sizes: (in_channels * k^2, locations) = (out_channels, in_channels * k^2)^T dot (out_channels, locations)
+    /// Which we then map carefully to: (channels_in, height, width).
     /// Method to re-shape from (channels_in * k ^2, locations) to (channels_in, height, width):
     /// 0. Init empty input grad tensor with zeros and shape (channels_in, height, width)
     /// 1. transpose&reshape the matmul output (dL/dpatches_mat) from (channels_in * k^2, locations) to (locations, channels_in, k, k)
@@ -390,7 +398,81 @@ impl Module for Conv2Dlayer {
     /// - We want to fill this volume (ignoring the batch dim): input_grad[:, top_y..top_y+k,top_x..top_x+k] '=' grad_patches[l]
     fn backward(&mut self, dz: ArrayD<f32>) -> ArrayD<f32> {
         // dz: (batch_size, out_channels, out_height, out_width)
-        todo!()
+        println!("[backward] [conv] incoming dz: {:?}", dz.shape());
+        let dz = dz
+            .into_dimensionality::<Ix4>()
+            .expect("[backward] [conv] incoming dz is 4D");
+        let (batch_size, out_channels, out_height, out_width) = dz.dim();
+
+        // Reshape incoming dz
+        let nb_locations = out_height * out_width;
+        // new dz shape: (batch_size, out_channels, locations)
+        let dz = dz
+            .to_shape((batch_size, out_channels, nb_locations))
+            .expect("[backward] [conv] incoming dz is compatible with img2col shape");
+
+        // last input ~ 'patches' matrix: (batch_size, in_channels * k ^2, locations)
+        let last_patches_mat = self
+            .last_input
+            .as_ref()
+            .expect("Run forward before the backward");
+
+        // transpose the last two dim
+        let k = self.kernel_size.0;
+        let last_patches_mat = last_patches_mat
+            .to_shape((batch_size, nb_locations, self.in_channels * k * k))
+            .expect("Last patch matrix shape is known and we can transpose the last two dim");
+
+        // dL/dkernels_mat: (batch_size, out_channels, in_channels * k ^2)
+        // = (batch_size, out_channels, locations) dot (batch_size, locations, in_channels * k^2)
+        // Iterating over the batch dimension to accumulate the gradient, only computing matmuls (2D)
+
+        let mut dkernels_mat: Array2<f32> = Array2::zeros((out_channels, self.in_channels * k * k));
+        for batch_idx in 0..batch_size {
+            dkernels_mat += &dz
+                .slice(s![batch_idx, .., ..])
+                .dot(&last_patches_mat.slice(s![batch_idx, .., ..]));
+        }
+
+        self.k_grad = Some(dkernels_mat);
+
+        // dL/dbias
+        self.b_grad = Some(
+            dz.fold_axis(Axis(2), 0.0, |&a, &b| a + b) // sum over locations
+                .fold_axis(Axis(0), 0.0, |&a, &b| a + b), // sum over batch
+        );
+
+        // dL/dinput, to be returned for the prev. layer to use for its own backprop
+        let height = out_height + k - 1;
+        let width = out_width + k - 1;
+        // First compute dL/dpatches.
+        // Will accumulate gradients over the batch dim
+        let mut acc_dpatches = Array2::<f32>::zeros((self.in_channels * k * k, nb_locations));
+        // Accumulate the gradient accross the batch
+        for sample_dz in dz.outer_iter() {
+            // (in_channels*k^2, locations) = (out_channels, in_channels*k^2)^T dot (out_channels, locations)
+            acc_dpatches += &self.kernels_mat.t().dot(&sample_dz);
+        }
+
+        // Building the dL/dinput from the dL/dpatches
+        let mut dinput = Array3::zeros((self.in_channels, height, width));
+
+        // Transpose / reshape dpatches from (in_channels * k^2, locations)
+        // to (locations, in_channels, k, k)
+        let binding = acc_dpatches.t();
+        let grad_patches = binding.to_shape((nb_locations, self.in_channels, k, k)).expect("[backward] [conv] img2col patches gradient is compatible with the shape (locations, in_channels, k, k)");
+        // Iterating over the patches
+        for (patch_idx, patch_grad) in grad_patches.outer_iter().enumerate() {
+            // patch top corner position
+            let top_y = patch_idx / out_width;
+            let top_x = patch_idx - top_y * out_width; // = patch_idx modulo out_width
+            dinput
+                .slice_mut(s![.., top_y..top_y + k, top_x..top_x + k])
+                .assign(&patch_grad);
+            // accumulating the gradient within dinput
+        }
+
+        dinput.into_dyn()
     }
 
     fn step(&mut self, _learning_rate: f32) {
