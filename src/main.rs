@@ -351,6 +351,9 @@ impl Module for Conv2Dlayer {
                 .assign(&output_feature_map);
         }
 
+        // Cache the input patches matrix
+        self.last_input = Some(last_input);
+
         let out = out.into_dyn();
         out
     }
