@@ -478,8 +478,15 @@ impl Module for Conv2Dlayer {
         dinput.into_dyn()
     }
 
-    fn step(&mut self, _learning_rate: f32) {
-        todo!()
+    fn step(&mut self, lr: f32) {
+        self.kernels_mat -= &(self.k_grad.take().unwrap() * lr);
+
+        self.b -= &(self.b_grad.take().unwrap() * lr);
+        // reset gradients
+        self.k_grad = None;
+        self.b_grad = None;
+        // reset input
+        self.last_input = None;
     }
 }
 
