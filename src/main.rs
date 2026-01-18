@@ -2,6 +2,7 @@ mod run;
 mod train;
 
 use ndarray::prelude::*;
+use ndarray::Zip;
 
 // use indicatif::ProgressIterator; // Adds .progress() to iterators (like tqdm)
 use mnist::MnistBuilder;
@@ -519,6 +520,113 @@ impl Module for Conv2Dlayer {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+struct MaxPoolLayer {
+    pool_size: (usize, usize),
+    // for backprop
+    last_input_max_mask: Option<Array6<f32>>, // (batch_size, in_channels, height/k, k, width/k, k)
+}
+
+impl MaxPoolLayer {
+    fn new(pool_size: (usize, usize)) -> MaxPoolLayer {
+        assert!(pool_size.0 == pool_size.1);
+        MaxPoolLayer {
+            pool_size,
+            last_input_max_mask: None,
+        }
+    }
+}
+
+impl Module for MaxPoolLayer {
+    fn forward(&mut self, input: ArrayD<f32>) -> ArrayD<f32> {
+        let input = input
+            .into_dimensionality::<Ix4>()
+            .expect("[forward] [maxPool] input is a 4D tensor");
+
+        let (batch_size, in_channels, height, width) = input.dim();
+        let k = self.pool_size.0;
+
+        // Reshape to (batch_size, in_channels, height / k, k, width / k, k)
+        let input_6d = input
+            .to_shape((batch_size, in_channels, height / k, k, width / k, k))
+            .expect("[forward] [maxPool] input is compatible with 6D tensor for the pooling");
+
+        // Fold the dims with size k, i.e axis 3 and 5 of input
+        let pooled: Array4<f32> = input_6d
+            .fold_axis(Axis(3), f32::NEG_INFINITY, |&a, &b| a.max(b))
+            .fold_axis(Axis(5 - 1), f32::NEG_INFINITY, |&a, &b| a.max(b));
+
+        // Creating a mask for the input to know where the max values are
+        // (for backprop)
+        let pooled_6d = pooled
+            .to_shape((batch_size, in_channels, height / k, 1, width / k, 1))
+            .unwrap();
+
+        let mut input_mask_6d =
+            Array6::zeros((batch_size, in_channels, height / k, k, width / k, k));
+
+        // expected: [128, 10, 12, 2, 12, 2], got: [128, 10, 12, 1, 12, 1]
+
+        Zip::from(&mut input_mask_6d)
+            .and(&input_6d)
+            .and_broadcast(&pooled_6d)
+            .for_each(|w, &in_val, &max_val| {
+                if in_val == max_val {
+                    // NOTE: multiple value could be == max and thus be marked
+                    // as 1.0 in the mask, which will lead to the gradient being duplicated durin
+                    // gthe backward. Leaving as is for now.
+                    *w += 1.0
+                }
+            });
+
+        self.last_input_max_mask = Some(input_mask_6d);
+
+        pooled.into_dyn()
+    }
+
+    fn backward(&mut self, dz: ArrayD<f32>) -> ArrayD<f32> {
+        // dz: (batch_size, channels, height/k, width/k)
+        let dz = dz
+            .into_dimensionality::<Ix4>()
+            .expect("[backward] [maxPool] dz is 4D");
+
+        let (batch_size, channels, out_height, out_width) = dz.dim();
+        let k = self.pool_size.0;
+        let (height, width) = (out_height * k, out_width * k);
+
+        let dz_6d = dz
+            .to_shape((batch_size, channels, out_height, 1, out_width, 1))
+            .unwrap();
+
+        let input_mask = self
+            .last_input_max_mask
+            .as_ref()
+            .expect("[backward] [maxPool] Run forward before backward");
+
+        let mut dinput = Array6::zeros((batch_size, channels, out_height, k, out_width, k));
+
+        // input mask: (batch_size, in_channels, height/k, k, width/k, k)
+        Zip::from(&mut dinput)
+            .and(input_mask)
+            .and_broadcast(&dz_6d)
+            .for_each(|din, &mask_val, &dz_val| {
+                if mask_val == 1.0 {
+                    *din += dz_val;
+                }
+            });
+
+        let dinput = dinput
+            .into_shape_with_order((batch_size, channels, height, width))
+            .expect("[backward] [maxPool] dinput is compatible with expected 4D tensor");
+
+        dinput.to_owned().into_dyn()
+    }
+
+    fn step(&mut self, _learning_rate: f32) {
+        self.last_input_max_mask = None;
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug)]
 struct FlattenLayer {
     last_input: Option<ArrayD<f32>>,
 }
@@ -566,6 +674,7 @@ impl Module for FlattenLayer {
 enum Layer {
     FC(FcLayer),
     Conv(Conv2Dlayer),
+    Pool(MaxPoolLayer),
     ReLU(ReluLayer),
     Softmax(SoftMaxLayer),
     Flatten(FlattenLayer),
@@ -576,6 +685,7 @@ impl Module for Layer {
         match self {
             Layer::FC(l) => l.forward(input),
             Layer::Conv(l) => l.forward(input),
+            Layer::Pool(l) => l.forward(input),
             Layer::ReLU(l) => l.forward(input),
             Layer::Softmax(l) => l.forward(input),
             Layer::Flatten(l) => l.forward(input),
@@ -586,6 +696,7 @@ impl Module for Layer {
         match self {
             Layer::FC(l) => l.backward(dz),
             Layer::Conv(l) => l.backward(dz),
+            Layer::Pool(l) => l.backward(dz),
             Layer::ReLU(l) => l.backward(dz),
             Layer::Softmax(l) => l.backward(dz),
             Layer::Flatten(l) => l.backward(dz),
@@ -596,6 +707,7 @@ impl Module for Layer {
         match self {
             Layer::FC(l) => l.step(lr),
             Layer::Conv(l) => l.step(lr),
+            Layer::Pool(l) => l.step(lr),
             Layer::ReLU(l) => l.step(lr),
             Layer::Softmax(l) => l.step(lr),
             Layer::Flatten(l) => l.step(lr),
