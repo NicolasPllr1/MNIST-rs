@@ -1,7 +1,10 @@
-// use indicatif::ProgressIterator;
+use indicatif::ProgressIterator;
 use ndarray::Array2;
 
-use crate::{load_mnist, FcLayer, Layer, Module, ReluLayer, SoftMaxLayer, NN};
+use crate::{
+    load_mnist, Conv2Dlayer, FcLayer, FlattenLayer, Layer, MaxPoolLayer, Module, ReluLayer,
+    SoftMaxLayer, NN,
+};
 use ndarray::prelude::*;
 use rand::seq::SliceRandom;
 use rand::thread_rng;
@@ -10,24 +13,6 @@ use std::io::Write;
 use std::path::Path;
 
 type CostFunction = fn(labels: &[u8], actual_y: &Array2<f32>) -> (Array1<f32>, Array2<f32>);
-
-fn least_squares(labels: &[u8], actual_y: &Array2<f32>) -> (Array1<f32>, Array2<f32>) {
-    let batch_size = labels.len();
-    let num_classes = actual_y.ncols();
-
-    // Convert labels to one-hot encoding Array2
-    let mut expected_y = Array2::zeros((batch_size, num_classes));
-    for (i, &label) in labels.iter().enumerate() {
-        expected_y[(i, label as usize)] = 1.0;
-    }
-
-    // Calculate least squares for each sample in batch: (expected - actual)^2
-    let loss = (expected_y.clone() - actual_y)
-        .mapv(|x| x * x)
-        .fold_axis(Axis(1), 0.0, |&a, &b| a + b);
-    let grad = 2.0 * (expected_y.clone() - actual_y);
-    (loss, grad)
-}
 
 fn cross_entropy(labels: &[u8], actual_y: &Array2<f32>) -> (Array1<f32>, Array2<f32>) {
     let batch_size = labels.len();
@@ -39,8 +24,9 @@ fn cross_entropy(labels: &[u8], actual_y: &Array2<f32>) -> (Array1<f32>, Array2<
         expected_y[(i, label as usize)] = 1.0;
     }
 
-    // Calculate least squares for each sample in batch: (expected - actual)^2
-    let loss = -(expected_y.clone() * actual_y.ln()).fold_axis(Axis(1), 0.0, |&a, &b| a + b);
+    // Calculate cross-entropy for each sample in batch: -log(p)
+    let log_probs = (actual_y + 1e-10).ln();
+    let loss = -(expected_y.clone() * log_probs).fold_axis(Axis(1), 0.0, |&a, &b| a + b);
 
     (loss, expected_y)
 }
@@ -70,7 +56,7 @@ impl Optimizer for SGD {
         // Calculate loss and gradient for the batch
         let (loss, grad) = cost_function(labels, output);
         // Backpropagate through layers in reverse order
-        nn.backward(grad);
+        nn.backward(grad.into_dyn());
 
         nn.step(self.learning_rate);
 
@@ -78,7 +64,7 @@ impl Optimizer for SGD {
     }
 }
 
-/// Train a neural network (stub)
+/// Train a neural network
 pub fn train(
     train_steps: usize,
     learning_rate: f32,
@@ -91,9 +77,15 @@ pub fn train(
 
     let mut nn = NN {
         layers: vec![
-            Layer::FC(FcLayer::new(28 * 28, 3)),
+            Layer::Conv(Conv2Dlayer::new(1, 5, (5, 5))), // Input image (1, 28x28) --> (5, 24, 24)
             Layer::ReLU(ReluLayer::new()),
-            Layer::FC(FcLayer::new(3, 10)),
+            Layer::Pool(MaxPoolLayer::new((4, 4))), // (5, 24, 24) --> (5, 6, 6)
+            Layer::Conv(Conv2Dlayer::new(5, 5, (3, 3))), // (5, 6, 6) --> (5, 4, 4)
+            Layer::ReLU(ReluLayer::new()),
+            Layer::Conv(Conv2Dlayer::new(5, 5, (2, 2))), // (5, 4, 4) --> (5, 3, 3)
+            Layer::ReLU(ReluLayer::new()),
+            Layer::Flatten(FlattenLayer::new()), // Flatten feature maps into a single 1D vector
+            Layer::FC(FcLayer::new(5 * 3 * 3, 10)),
             Layer::Softmax(SoftMaxLayer::new()),
         ],
     };
@@ -113,56 +105,6 @@ pub fn train(
     // Create indices that will be shuffled for each epoch
     let mut indices: Vec<usize> = (0..num_images).collect();
 
-    // Original main() code from before rebase:
-    /*
-    fn main() {
-        let mut nn = NN {
-            layers: vec![
-                Layer::FC(FcLayer::new(784, 10)),
-            ],
-        };
-
-        let (train_images, train_labels, test_images, test_labels) = load_mnist();
-        println!("Train images: {:?}", train_images.len());
-        println!("Train labels: {:?}", train_labels.len());
-        println!("Test images: {:?}", test_images.len());
-        println!("Test labels: {:?}", test_labels.len());
-
-        // train loop
-        // TODO: calculate loss and do backpropagation
-        println!("Training...");
-        for (image, _label) in train_images.chunks(784).zip(train_labels.iter()).progress_count(60_000) {
-            let img_f32: Vec<f32> = image.iter().map(|&x| x as f32).collect();
-            let input = Array2::from_shape_vec((1, 784), img_f32).unwrap();
-            let _output = nn.forward(input);
-        }
-
-        // test loop
-        // TODO: calculate accuracy
-        println!("Testing...");
-        let mut total_correct = 0;
-        let mut total_samples = 0;
-        for (image, label) in test_images.chunks(784).zip(test_labels.iter()).progress_count(10_000) {
-            let img_f32: Vec<f32> = image.iter().map(|&x| x as f32).collect();
-            let input = Array2::from_shape_vec((1, 784), img_f32).unwrap();
-            let output = nn.forward(input);
-            // Find index of max value (argmax)
-            let predicted_label = output
-                .iter()
-                .enumerate()
-                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
-                .map(|(idx, _)| idx)
-                .unwrap() as u8;
-            if predicted_label == *label {
-                total_correct += 1;
-            }
-            total_samples += 1;
-        }
-        let accuracy = total_correct as f32 / total_samples as f32;
-        println!("Accuracy: {:?}", accuracy);
-    }
-    */
-
     // Create or truncate CSV file and write header
     let mut csv_file = fs::File::create(loss_csv_path)?;
     writeln!(csv_file, "epoch,loss,accuracy")?;
@@ -171,7 +113,7 @@ pub fn train(
 
     const BATCH_SIZE: usize = 128;
     // Iterate through epochs
-    for epoch in 0..train_steps {
+    for epoch in (0..train_steps).progress() {
         // Shuffle indices for this epoch
         indices.shuffle(&mut thread_rng());
 
@@ -180,7 +122,7 @@ pub fn train(
         let mut epoch_loss_count = 0;
 
         // Iterate through shuffled data in batches
-        for batch_indices in indices.chunks(BATCH_SIZE) {
+        for batch_indices in indices.chunks(BATCH_SIZE).progress() {
             let batch_size = batch_indices.len(); // used to catch the remainder
 
             // Collect images and labels for this batch efficiently
@@ -194,16 +136,26 @@ pub fn train(
                 batch_labels.push(*label);
             }
 
-            // Create batch input Array2 with shape (batch_size, 784)
-            let input = Array2::from_shape_vec((batch_size, 784), batch_images)
+            // Create batch input Array4 with shape (batch_size, channels=1, 28, 28)
+            let input = Array4::from_shape_vec((batch_size, 1, 28, 28), batch_images)
                 .map_err(|e| format!("Failed to create input array: {}", e))?;
 
             // Run forward pass (output shape: (batch_size, num_classes))
-            let output = nn.forward(input);
+            let output = nn.forward(input.into_dyn());
 
             // Calculate loss and do backpropagation on the batch
             // The cost function will convert labels to one-hot encoding internally
-            let loss = optimizer.step(&mut nn, cross_entropy, &batch_labels, &output);
+            let loss = optimizer.step(
+                &mut nn,
+                cross_entropy,
+                &batch_labels,
+                &output
+                    .into_dimensionality::<Ix2>()
+                    .expect("Output should be castable to 2D"),
+            );
+
+            let avg_loss = loss.sum() / batch_size as f32;
+            println!("[BATCH LOSS] {:.4}", avg_loss);
 
             // Accumulate loss for epoch average
             epoch_loss_sum += loss.mean().unwrap();
@@ -219,21 +171,24 @@ pub fn train(
 
             // Get average loss for this epoch
             let epoch_avg_loss = epoch_loss_sum / epoch_loss_count as f32;
+            println!("[EPOCH LOSS] {:.4}", epoch_avg_loss);
 
             // Run test loop to calculate accuracy
             println!("Running test loop...");
             let mut total_correct = 0;
             let mut total_samples = 0;
-            for (image, label) in test_images.chunks(784).zip(test_labels.iter()) {
+            for (image, label) in test_images.chunks(784).zip(test_labels.iter()).progress() {
                 // Normalize image
                 let img_f32: Vec<f32> = image.iter().map(|&x| x as f32 / 255.0).collect();
-                let input = Array2::from_shape_vec((1, 784), img_f32)
+                let input = Array4::from_shape_vec((1, 1, 28, 28), img_f32)
                     .map_err(|e| format!("Failed to create test input array: {}", e))?;
 
-                let output = nn.forward(input);
+                let output = nn.forward(input.into_dyn());
 
                 // Find index of max value (argmax) - predicted label
                 let predicted_label = output
+                    .into_dimensionality::<Ix2>()
+                    .expect("Output shoud be castable to 2D")
                     .row(0)
                     .iter()
                     .enumerate()
@@ -247,6 +202,7 @@ pub fn train(
                 total_samples += 1;
             }
             let accuracy = total_correct as f32 / total_samples as f32;
+            println!("[TEST ACC] {:.3}", accuracy);
 
             // Write to CSV
             writeln!(csv_file, "{},{},{}", epoch + 1, epoch_avg_loss, accuracy)?;

@@ -1,4 +1,5 @@
 use crate::{Module, NN};
+use ndarray::prelude::*;
 use ndarray::Array2;
 use std::fs;
 
@@ -24,7 +25,10 @@ pub fn run(checkpoint_path: &str, example_path: &str) -> Result<(), Box<dyn std:
         .map_err(|e| format!("Failed to create input array: {}", e))?;
 
     // Run forward pass
-    let output = nn.forward(input);
+    let output = nn
+        .forward(input.into_dyn())
+        .into_dimensionality::<Ix2>()
+        .expect("Output should be castable to 2D");
 
     // Get prediction (argmax - index with highest value)
     let predicted_label = output
