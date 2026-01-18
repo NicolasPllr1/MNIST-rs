@@ -100,56 +100,6 @@ pub fn train(
     // Create indices that will be shuffled for each epoch
     let mut indices: Vec<usize> = (0..num_images).collect();
 
-    // Original main() code from before rebase:
-    /*
-    fn main() {
-        let mut nn = NN {
-            layers: vec![
-                Layer::FC(FcLayer::new(784, 10)),
-            ],
-        };
-
-        let (train_images, train_labels, test_images, test_labels) = load_mnist();
-        println!("Train images: {:?}", train_images.len());
-        println!("Train labels: {:?}", train_labels.len());
-        println!("Test images: {:?}", test_images.len());
-        println!("Test labels: {:?}", test_labels.len());
-
-        // train loop
-        // TODO: calculate loss and do backpropagation
-        println!("Training...");
-        for (image, _label) in train_images.chunks(784).zip(train_labels.iter()).progress_count(60_000) {
-            let img_f32: Vec<f32> = image.iter().map(|&x| x as f32).collect();
-            let input = Array2::from_shape_vec((1, 784), img_f32).unwrap();
-            let _output = nn.forward(input);
-        }
-
-        // test loop
-        // TODO: calculate accuracy
-        println!("Testing...");
-        let mut total_correct = 0;
-        let mut total_samples = 0;
-        for (image, label) in test_images.chunks(784).zip(test_labels.iter()).progress_count(10_000) {
-            let img_f32: Vec<f32> = image.iter().map(|&x| x as f32).collect();
-            let input = Array2::from_shape_vec((1, 784), img_f32).unwrap();
-            let output = nn.forward(input);
-            // Find index of max value (argmax)
-            let predicted_label = output
-                .iter()
-                .enumerate()
-                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
-                .map(|(idx, _)| idx)
-                .unwrap() as u8;
-            if predicted_label == *label {
-                total_correct += 1;
-            }
-            total_samples += 1;
-        }
-        let accuracy = total_correct as f32 / total_samples as f32;
-        println!("Accuracy: {:?}", accuracy);
-    }
-    */
-
     // Create or truncate CSV file and write header
     let mut csv_file = fs::File::create(loss_csv_path)?;
     writeln!(csv_file, "epoch,loss,accuracy")?;
