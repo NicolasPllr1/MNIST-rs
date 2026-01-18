@@ -12,6 +12,8 @@ use std::f32;
 use std::fs::File;
 use std::io::{Read, Write};
 
+const DEBUG: bool = false;
+
 trait Module {
     fn forward(&mut self, input: ArrayD<f32>) -> ArrayD<f32>; // Input is (batch_size, features)
     /// Backward pass
@@ -285,7 +287,9 @@ impl Module for Conv2Dlayer {
     /// Input: (batch_size, in_channels, height, width)
     /// Output: (batch_size, out_channels, height-k+1, width-k+1), where kernel_size=(k,k)
     fn forward(&mut self, input: ArrayD<f32>) -> ArrayD<f32> {
-        println!("[forward] [conv] input: {:?}", input.shape());
+        if DEBUG {
+            println!("[forward] [conv] input: {:?}", input.shape());
+        }
         let input = input
             .into_dimensionality::<Ix4>()
             .expect("Conv layer input should be 4D");
@@ -417,7 +421,9 @@ impl Module for Conv2Dlayer {
     /// - We want to fill this volume (ignoring the batch dim): input_grad[:, top_y..top_y+k,top_x..top_x+k] '=' grad_patches[l]
     fn backward(&mut self, dz: ArrayD<f32>) -> ArrayD<f32> {
         // dz: (batch_size, out_channels, out_height, out_width)
-        println!("[backward] [conv] incoming dz: {:?}", dz.shape());
+        if DEBUG {
+            println!("[backward] [conv] incoming dz: {:?}", dz.shape());
+        }
         let dz = dz
             .into_dimensionality::<Ix4>()
             .expect("[backward] [conv] incoming dz is 4D");
