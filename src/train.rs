@@ -1,4 +1,4 @@
-// use indicatif::ProgressIterator;
+use indicatif::ProgressIterator;
 use ndarray::Array2;
 
 use crate::{
@@ -113,7 +113,7 @@ pub fn train(
 
     const BATCH_SIZE: usize = 128;
     // Iterate through epochs
-    for epoch in 0..train_steps {
+    for epoch in (0..train_steps).progress() {
         // Shuffle indices for this epoch
         indices.shuffle(&mut thread_rng());
 
@@ -122,7 +122,7 @@ pub fn train(
         let mut epoch_loss_count = 0;
 
         // Iterate through shuffled data in batches
-        for batch_indices in indices.chunks(BATCH_SIZE) {
+        for batch_indices in indices.chunks(BATCH_SIZE).progress() {
             let batch_size = batch_indices.len(); // used to catch the remainder
 
             // Collect images and labels for this batch efficiently
@@ -177,7 +177,7 @@ pub fn train(
             println!("Running test loop...");
             let mut total_correct = 0;
             let mut total_samples = 0;
-            for (image, label) in test_images.chunks(784).zip(test_labels.iter()) {
+            for (image, label) in test_images.chunks(784).zip(test_labels.iter()).progress() {
                 // Normalize image
                 let img_f32: Vec<f32> = image.iter().map(|&x| x as f32 / 255.0).collect();
                 let input = Array2::from_shape_vec((1, 784), img_f32)
