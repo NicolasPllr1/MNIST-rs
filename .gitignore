@@ -1,4 +1,5 @@
 /target
 
-/checkpoints
-/checkpoints-cnn
+loss.csv
+/checkpoints*
+/plots
