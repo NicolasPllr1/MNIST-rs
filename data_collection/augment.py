@@ -5,15 +5,14 @@ from pathlib import Path
 import cv2
 from tqdm import tqdm
 
-IMAGE_SIZE = (512, 512)
-img_size_x = IMAGE_SIZE[0]
-img_size_y = IMAGE_SIZE[1]
+IMAGE_SIZE = (1080, 1920)
+img_height, img_width = IMAGE_SIZE
 
 # Augmentation hyper-parameters
 ROTATIONS = [-15, 0, 15]  # Degrees
-SCALES = [0.5, 1.0, 1.5]  # Factor
-TRANSLATIONS_X = [-img_size_x / 10, 0, img_size_x / 10]  # Pixels
-TRANSLATIONS_Y = [-img_size_y / 10, 0, img_size_y / 10]  # Pixels
+SCALES = [0.3, 1.0, 1.3]  # Factor
+TRANSLATIONS_X = [-img_width / 10, 0, img_width / 10]  # Pixels
+TRANSLATIONS_Y = [-img_height / 10, 0, img_height / 10]  # Pixels
 IMAGE_EXTENSIONS = {".png"}
 
 
@@ -75,10 +74,7 @@ def main():
                 rot_map,
                 (cols, rows),
                 flags=cv2.INTER_LINEAR,
-                # borderMode=cv2.BORDER_CONSTANT,
-                # borderMode=cv2.BORDER_REPLICATE,
-                borderMode=cv2.BORDER_REFLECT_101,
-                # borderValue=mean_color,
+                borderValue=mean_color,
             )
 
             # # Optional: Add a slight Gaussian Blur to some to simulate webcam motion
@@ -87,7 +83,9 @@ def main():
             # 4. Save with descriptive suffix
             suffix = f"_R{rot}_S{scale}_TX{tx}_TY{ty}"
             out_name = f"{img_p.stem}{suffix}{img_p.suffix}"
-            cv2.imwrite(str(augment_dir / out_name), augmented)
+            out_dir = augment_dir / (img_p.parent.relative_to(input_path))
+
+            cv2.imwrite(str(out_dir / out_name), augmented)
 
     print(f"Augmentation done! Check the results in: {augment_dir}")
 
