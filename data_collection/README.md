@@ -48,3 +48,16 @@ uv run collect.py
 ```bash
 ./build_dataset.sh <data-dir> <output-dataset-dir>
 ```
+
+## Pytorch training
+
+You can train a model using the simple and hackable `train.py` script.
+
+I used it to quickly check that a model _could_ train on the data I collected,
+sweeping the optimizer from vanilla SGB, to SGD with momentum and finally using
+Adam.
+
+My Rust implementation was using SGB and didn't seem to train on my dataset. It
+turns out the pytorch version is having issues too. This is symptom of SGD used
+in a deeper CNN and more comple dataset compared to what's typically sufficient
+to solve MNIST.
